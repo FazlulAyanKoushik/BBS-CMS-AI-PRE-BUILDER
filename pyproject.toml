@@ -1,0 +1,22 @@
+[project]
+name = "bbs-cms-ai-pre-builder"
+version = "0.1.0"
+description = "PoC: Japanese business CSV + AI agent -> website structure spec (REST JSON only)"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.0",
+    "uvicorn[standard]>=0.30.0",
+    "pandas>=2.2.0",
+    "python-dotenv>=1.0.1",
+    "google-genai>=1.0.0",
+    "python-multipart>=0.0.9",
+    "requests>=2.31.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
