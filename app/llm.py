@@ -3,12 +3,7 @@
 from __future__ import annotations
 
 import abc
-import os
 from typing import Any, Literal
-
-from dotenv import load_dotenv
-
-load_dotenv()
 
 try:
     from google import genai
@@ -18,9 +13,7 @@ except Exception:  # pragma: no cover - google-genai optional
     genai_types = None  # type: ignore[assignment]
 
 from app.mock_site import build_mock_spec
-from app.prompts import SYSTEM_PROMPT, build_user_prompt
-
-DEFAULT_MODEL = os.getenv("GEMINI_MODEL") or "gemini-3.6-flash"
+from app.config import settings
 
 
 class LLMProvider(abc.ABC):
@@ -50,10 +43,11 @@ class GeminiProvider(LLMProvider):
     ) -> None:
         if genai is None:
             raise ImportError("The 'google-genai' package is not installed.")
-        self.model = model or os.getenv("GEMINI_MODEL") or DEFAULT_MODEL
-        self.client = genai.Client(api_key=api_key or os.getenv("GEMINI_API_KEY"))
+        self.model = model or settings.gemini_model
+        self.client = genai.Client(api_key=api_key or settings.gemini_api_key)
 
     def generate_structured_spec(self, business_profile: dict[str, Any], criteria: dict[str, Any]) -> dict[str, Any]:
+        SYSTEM_PROMPT, build_user_prompt = _get_prompts()
         user_prompt = build_user_prompt(business_profile, criteria)
         response = self.client.models.generate_content(
             model=self.model,
@@ -62,6 +56,12 @@ class GeminiProvider(LLMProvider):
         )
         content = getattr(response, "text", None) or ""
         return _parse_json_object(content)
+
+
+def _get_prompts():
+    """Lazy import to avoid circular dependency."""
+    from app.agents.agent1.prompts import SYSTEM_PROMPT, build_user_prompt
+    return SYSTEM_PROMPT, build_user_prompt
 
 
 def _parse_json_object(content: str) -> dict[str, Any]:
@@ -88,13 +88,12 @@ def _parse_json_object(content: str) -> dict[str, Any]:
 
 
 def get_provider() -> LLMProvider:
-    """Instantiate the configured provider (env: LLM_PROVIDER=gemini|mock)."""
-    provider = os.getenv("LLM_PROVIDER", "mock").strip().lower()
-    if provider == "gemini":
+    """Instantiate the configured provider from settings."""
+    if settings.is_gemini_enabled:
         return GeminiProvider()
     return MockProvider()
 
 
 def provider_name() -> Literal["gemini", "mock"]:
-    name = os.getenv("LLM_PROVIDER", "mock").strip().lower()
-    return "gemini" if name == "gemini" else "mock"
+    """Get the active provider name from settings."""
+    return "gemini" if settings.is_gemini_enabled else "mock"

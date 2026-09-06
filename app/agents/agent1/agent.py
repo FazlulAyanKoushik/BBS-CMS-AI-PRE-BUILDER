@@ -7,6 +7,7 @@ from typing import Any
 
 from app.llm import MockProvider, get_provider
 from app.schemas import SiteSpec
+from app.agents.agent1.prompts import SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 

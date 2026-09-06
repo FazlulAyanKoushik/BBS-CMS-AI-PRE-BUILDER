@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.agent import AIAgent1
+from app.agents import AIAgent1
+from app.config import reload_settings
 from app.csv_loader import build_profile, build_profiles_from_file, read_csv_bytes
 from app.llm import GeminiProvider, MockProvider, get_provider, provider_name
 from app.schemas import SiteSpec
@@ -66,23 +67,32 @@ def test_build_profile_empty_bytes_raises():
 
 def test_provider_name_routing(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    reload_settings()
     assert provider_name() == "gemini"
     monkeypatch.setenv("LLM_PROVIDER", "mock")
+    reload_settings()
     assert provider_name() == "mock"
     monkeypatch.setenv("LLM_PROVIDER", "bogus")
+    reload_settings()
     assert provider_name() == "mock"
 
 
 def test_get_provider_returns_mock_by_default(monkeypatch):
     monkeypatch.delenv("LLM_PROVIDER", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    reload_settings()
     assert isinstance(get_provider(), MockProvider)
 
 
 def test_gemini_provider_requires_api_key(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "gemini")
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
-    with pytest.raises(Exception):
-        GeminiProvider(api_key="")
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    reload_settings()
+    # With no API key, should fall back to mock
+    assert isinstance(get_provider(), MockProvider)
 
 
 def test_gemini_provider_reads_model_from_env_at_runtime(monkeypatch):

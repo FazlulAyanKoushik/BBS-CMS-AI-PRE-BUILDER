@@ -6,6 +6,8 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.contracts.version import CONTRACT_VERSION
+
 
 class BusinessProfile(BaseModel):
     """Normalized business information extracted from the CSV."""
@@ -68,6 +70,7 @@ class SiteSpec(BaseModel):
     suggested_site_type: str
     design_style: Optional[str] = None
     pages: list[SitePage] = Field(default_factory=list)
+    contract_version: str = CONTRACT_VERSION
 
 
 class GenerateResponse(BaseModel):

@@ -6,75 +6,126 @@ business CSV + criteria and returns a website structure spec as JSON.
 
 from __future__ import annotations
 
-import json
+from contextlib import asynccontextmanager
 import logging
-from typing import Any
+import time
+from typing import Callable
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from dotenv import load_dotenv
 
-from app.agent import AGENT_NAME, AIAgent1
-from app.csv_loader import build_profile
-from app.llm import provider_name
-from app.schemas import GenerateResponseDict, HealthResponse
-
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
+
+from fastapi import FastAPI, Request, Response
+from starlette.middleware.base import BaseHTTPMiddleware
+
+from app.api import router
+from app.config import settings
+from app.llm import get_provider
+
+# Configure logging
+logging.basicConfig(
+    level=settings.log_level,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    """Middleware to log all HTTP requests with timing."""
+
+    async def dispatch(self, request: Request, call_next: Callable) -> Response:
+        start_time = time.perf_counter()
+        
+        # Log incoming request
+        client_ip = request.client.host if request.client else "unknown"
+        logger.info(
+            "📥 %s %s from %s",
+            request.method,
+            request.url.path,
+            client_ip,
+        )
+        
+        # Process request
+        response = await call_next(request)
+        
+        # Calculate duration
+        duration_ms = (time.perf_counter() - start_time) * 1000
+        
+        # Log response
+        status_emoji = "✅" if 200 <= response.status_code < 300 else "❌"
+        logger.info(
+            "📤 %s %s → %d %s (%.2fms)",
+            request.method,
+            request.url.path,
+            response.status_code,
+            status_emoji,
+            duration_ms,
+        )
+        
+        return response
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for FastAPI app - logs configuration on startup."""
+    # ─── Startup ──────────────────────────────────────────────────────────────
+    provider = get_provider()
+    
+    logger.info("=" * 60)
+    logger.info("🚀 %s v%s starting up", settings.app_name, settings.app_version)
+    logger.info("=" * 60)
+    
+    # LLM Provider info
+    logger.info("📡 LLM Provider Configuration:")
+    logger.info("   Provider:      %s", provider.name.upper())
+    logger.info("   Configured:    %s", settings.llm_provider.upper())
+    
+    if settings.llm_provider == "gemini":
+        api_key_status = "✅ Provided" if settings.gemini_api_key else "❌ Missing (will fallback to mock)"
+        logger.info("   API Key:       %s", api_key_status)
+        if settings.gemini_api_key:
+            # Show only first 10 chars for security
+            masked_key = settings.gemini_api_key[:10] + "..." + settings.gemini_api_key[-4:] if len(settings.gemini_api_key) > 14 else "***"
+            logger.info("   API Key (masked): %s", masked_key)
+        logger.info("   Model:         %s", settings.gemini_model)
+    else:
+        logger.info("   Mode:          Deterministic mock (no API key required)")
+    
+    # Server info
+    logger.info("🌐 Server Configuration:")
+    logger.info("   Host:          %s", settings.host)
+    logger.info("   Port:          %d", settings.port)
+    logger.info("   Reload:        %s", "Enabled" if settings.reload else "Disabled")
+    
+    # CSV Processing
+    logger.info("📄 CSV Processing:")
+    logger.info("   Max Size:      %s MB", settings.max_csv_bytes // (1024 * 1024))
+    logger.info("   Encodings:     %s", ", ".join(settings.supported_encodings))
+    
+    # Contract
+    logger.info("📋 Contract:")
+    logger.info("   Version:       %s", settings.contract_version)
+    
+    logger.info("=" * 60)
+    logger.info("✅ Startup complete - ready to accept requests")
+    logger.info("=" * 60)
+    
+    yield
+    
+    # ─── Shutdown ─────────────────────────────────────────────────────────────
+    logger.info("=" * 60)
+    logger.info("🛑 %s shutting down", settings.app_name)
+    logger.info("=" * 60)
+
 
 app = FastAPI(
-    title="BBS-CMS AI Pre-Builder (PoC)",
-    version="0.1.0",
+    title=settings.app_name,
+    version=settings.app_version,
     description="Ingests a Japanese business CSV + criteria and returns a website structure spec JSON via AI_AGENT_1.",
+    lifespan=lifespan,
 )
 
-_MAX_CSV_BYTES = 10 * 1024 * 1024
+# Add request logging middleware
+app.add_middleware(RequestLoggingMiddleware)
 
-
-@app.get("/api/health", response_model=HealthResponse, tags=["meta"])
-def health() -> HealthResponse:
-    return HealthResponse(provider=provider_name())
-
-
-@app.post("/api/generate", response_model=GenerateResponseDict, tags=["generate"])
-async def generate(
-    file: UploadFile = File(
-        ...,
-        description="Japanese business CSV (UTF-8 or Shift-JIS). Headers row optional.",
-    ),
-    criteria_json: str = Form(
-        "{ }",
-        description="JSON string with user website criteria, e.g. {\"objectives\": \"...\", \"language\": \"ja\"}",
-    ),
-    row_index: int = Form(0, ge=0, description="Which data row of the CSV to use (0-based)."),
-) -> dict[str, Any]:
-    data = await file.read()
-    if not data:
-        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
-    if len(data) > _MAX_CSV_BYTES:
-        raise HTTPException(status_code=413, detail="CSV too large (max 10 MB).")
-
-    try:
-        criteria = json.loads(criteria_json) if criteria_json and criteria_json.strip() else {}
-        if not isinstance(criteria, dict):
-            raise ValueError
-    except (json.JSONDecodeError, ValueError):
-        raise HTTPException(status_code=422, detail="criteria_json must be a valid JSON object.")
-
-    try:
-        profile = build_profile(data, row_index=row_index)
-    except IndexError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-
-    agent = AIAgent1()
-    try:
-        spec = agent.generate(profile, criteria)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"AI_AGENT_1 failed: {exc}")
-
-    return GenerateResponseDict(
-        agent_name=AGENT_NAME,
-        provider=agent.provider_name,
-        site_spec=spec.model_dump(exclude_none=True),
-    ).model_dump()
+app.include_router(router)

@@ -7,11 +7,15 @@ import json
 import os
 import sys
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import requests
 
-from app.agent import AGENT_NAME, AIAgent1
+from app.agents import AGENT_NAME, AIAgent1
 from app.csv_loader import build_profiles_from_file
 from app.schemas import SiteSpec
 
