@@ -8,19 +8,17 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 import logging
-import time
-from typing import Callable
 
 from dotenv import load_dotenv
 
 load_dotenv()
 
-from fastapi import FastAPI, Request, Response
-from starlette.middleware.base import BaseHTTPMiddleware
+from fastapi import FastAPI
 
 from app.api import router
 from app.config import settings
 from app.llm import get_provider
+from app.middleware import RateLimitMiddleware, RequestLoggingMiddleware
 
 # Configure logging
 logging.basicConfig(
@@ -30,56 +28,21 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Middleware to log all HTTP requests with timing."""
-
-    async def dispatch(self, request: Request, call_next: Callable) -> Response:
-        start_time = time.perf_counter()
-        
-        # Log incoming request
-        client_ip = request.client.host if request.client else "unknown"
-        logger.info(
-            "📥 %s %s from %s",
-            request.method,
-            request.url.path,
-            client_ip,
-        )
-        
-        # Process request
-        response = await call_next(request)
-        
-        # Calculate duration
-        duration_ms = (time.perf_counter() - start_time) * 1000
-        
-        # Log response
-        status_emoji = "✅" if 200 <= response.status_code < 300 else "❌"
-        logger.info(
-            "📤 %s %s → %d %s (%.2fms)",
-            request.method,
-            request.url.path,
-            response.status_code,
-            status_emoji,
-            duration_ms,
-        )
-        
-        return response
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifespan context manager for FastAPI app - logs configuration on startup."""
     # ─── Startup ──────────────────────────────────────────────────────────────
     provider = get_provider()
-    
+
     logger.info("=" * 60)
     logger.info("🚀 %s v%s starting up", settings.app_name, settings.app_version)
     logger.info("=" * 60)
-    
+
     # LLM Provider info
     logger.info("📡 LLM Provider Configuration:")
     logger.info("   Provider:      %s", provider.name.upper())
     logger.info("   Configured:    %s", settings.llm_provider.upper())
-    
+
     if settings.llm_provider == "gemini":
         api_key_status = "✅ Provided" if settings.gemini_api_key else "❌ Missing (will fallback to mock)"
         logger.info("   API Key:       %s", api_key_status)
@@ -90,28 +53,28 @@ async def lifespan(app: FastAPI):
         logger.info("   Model:         %s", settings.gemini_model)
     else:
         logger.info("   Mode:          Deterministic mock (no API key required)")
-    
+
     # Server info
     logger.info("🌐 Server Configuration:")
     logger.info("   Host:          %s", settings.host)
     logger.info("   Port:          %d", settings.port)
     logger.info("   Reload:        %s", "Enabled" if settings.reload else "Disabled")
-    
+
     # CSV Processing
     logger.info("📄 CSV Processing:")
     logger.info("   Max Size:      %s MB", settings.max_csv_bytes // (1024 * 1024))
     logger.info("   Encodings:     %s", ", ".join(settings.supported_encodings))
-    
+
     # Contract
     logger.info("📋 Contract:")
     logger.info("   Version:       %s", settings.contract_version)
-    
+
     logger.info("=" * 60)
     logger.info("✅ Startup complete - ready to accept requests")
     logger.info("=" * 60)
-    
+
     yield
-    
+
     # ─── Shutdown ─────────────────────────────────────────────────────────────
     logger.info("=" * 60)
     logger.info("🛑 %s shutting down", settings.app_name)
@@ -125,7 +88,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Add rate limiting middleware (first, so it runs before request logging)
+app.add_middleware(RateLimitMiddleware)
+
 # Add request logging middleware
-app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(RequestLoggingMiddleware, logger=logger)
 
 app.include_router(router)

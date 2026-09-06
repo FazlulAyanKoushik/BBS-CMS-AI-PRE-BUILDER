@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
 
+    # Rate Limiting
+    rate_limit_per_minute: int = 60
+    rate_limit_per_hour: int = 1000
+    rate_limit_burst: int = 10
+
     @property
     def is_gemini_enabled(self) -> bool:
         """Check if Gemini provider is properly configured."""
